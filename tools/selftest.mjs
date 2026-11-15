@@ -1,16 +1,29 @@
 /**
  * tools/selftest.mjs —— 用假 ctx 跑 context-slimmer 的关键路径
  * ============================================================================
- * 不接触真实 DSH。验证：
- *   主代理装上分组 / 子代理不动 / list·open·close 正确重算 deny /
- *   空配置不生效 / 环境变量开关 / includeSubagents / 匹配不到的组告警 / 补扫
+ * 不接触真实 DSH。覆盖：
+ *   · 主代理按组收起 / 子代理不动 / includeSubagents
+ *   · list / open / close（窗口级，落盘）
+ *   · 三级合并（全局 close → 工作区 open → 窗口 close/open）
+ *   · 空配置 / 环境变量开关 / 匹配不到的组告警 / 补扫 / disposed 回收
  *
  * 运行：
  *   $env:ELECTRON_RUN_AS_NODE = '1'
  *   & $env:DSH_NODE_EXECUTABLE tools\selftest.mjs
  * ============================================================================
  */
-import { apply } from '../index.js'
+import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+// 让窗口级配置落到临时目录，别碰真实的 ~/.dsh
+const TMP_HOME = 'E:/working/_slimmer_test_home'
+process.env.DSH_HOME = TMP_HOME
+if (existsSync(TMP_HOME)) rmSync(TMP_HOME, { recursive: true, force: true })
+mkdirSync(TMP_HOME, { recursive: true })
+
+const SESSION_FILE = join(TMP_HOME, 'context-slimmer', 'sessions.json')
+
+const { apply } = await import('../index.js')
 
 let failures = 0
 const check = (label, condition, detail) => {
@@ -31,11 +44,12 @@ function makeWorld(options = {}) {
   const restrictions = []
   const listeners = new Map()
   const toolDef = (name) => ({ name, description: name, parameters: { type: 'object', properties: {} } })
+  const toolsList = options.tools ?? GLOBAL_TOOLS
 
   const tools = {
     definitions(scope) {
-      if (scope === undefined) return GLOBAL_TOOLS.map(toolDef)
-      return GLOBAL_TOOLS.map(toolDef)
+      if (scope === undefined) return toolsList.map(toolDef)
+      return toolsList.map(toolDef)
     },
     restrict(filter) {
       const rec = { filter, disposed: false }
@@ -73,8 +87,13 @@ function makeWorld(options = {}) {
 
 const makeAgent = (id, options = {}) => ({
   id,
-  session: { header: options.origin === undefined ? {} : { origin: options.origin } },
-  // 真实的 agent.ctx 上有 tools 服务（服务注入），所以 mock 也要给
+  session: {
+    id,
+    header: {
+      ...(options.origin === undefined ? {} : { origin: options.origin }),
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    },
+  },
   ctx: {
     tools: options.tools,
     get: (name) => (name === 'tools' ? options.tools : undefined),
@@ -88,6 +107,9 @@ const liveRestriction = (restrictions) => {
   }
   return undefined
 }
+
+const denyOf = (restrictions) => liveRestriction(restrictions)?.filter?.deny ?? []
+const sorted = (list) => [...list].sort().join(',')
 
 const BROWSER_GROUP = { name: 'browser', patterns: ['dsh_browser_*'] }
 const TASKBOARD_GROUP = { name: 'taskboard', patterns: ['taskboard_*'] }
@@ -103,18 +125,15 @@ async function scenario(name, config, body) {
   }
 }
 
-// ── 1. 主代理：分组被收起，核心工具不动 ────────────────────────────────────
+// ── 1. 主代理：定义了组就收起（1.0 行为保持）──────────────────────────────
 await scenario('主代理按组收起', { groups: [BROWSER_GROUP, TASKBOARD_GROUP] }, async (world) => {
   const agent = makeAgent('main-1', { tools: world.tools })
   await world.ctx.__emit('agent/created', { agent })
-
-  const live = liveRestriction(world.restrictions)
-  check('产生了 restriction', live !== undefined)
-  const deny = live?.filter?.deny ?? []
-  check('浏览器工具被收起', deny.includes('dsh_browser_open') && deny.includes('dsh_browser_click'), JSON.stringify(deny))
+  const deny = denyOf(world.restrictions)
+  check('浏览器工具被收起', deny.includes('dsh_browser_open') && deny.includes('dsh_browser_click'), sorted(deny))
   check('taskboard 工具被收起', deny.includes('taskboard_list'))
-  check('核心工具 read/write/pwsh 没被收', !deny.includes('read') && !deny.includes('write') && !deny.includes('pwsh'))
-  check('控制工具 tool_groups 没被收', !deny.includes('tool_groups'))
+  check('核心工具没被收', !deny.includes('read') && !deny.includes('pwsh'))
+  check('控制工具没被收', !deny.includes('tool_groups'))
 })
 
 // ── 2. 子代理默认不动 ─────────────────────────────────────────────────────
@@ -124,16 +143,16 @@ await scenario('子代理默认不动', { groups: [BROWSER_GROUP] }, async (worl
   check('没有产生 restriction', world.restrictions.length === 0, `实际 ${world.restrictions.length}`)
 })
 
-// ── 3. includeSubagents: true 时子代理也管 ────────────────────────────────
+// ── 3. includeSubagents ───────────────────────────────────────────────────
 await scenario('includeSubagents 生效', { groups: [BROWSER_GROUP], includeSubagents: true }, async (world) => {
   const agent = makeAgent('sub-2', { origin: 'subagent', tools: world.tools })
   await world.ctx.__emit('agent/created', { agent })
   check('产生了 restriction', world.restrictions.length === 1)
 })
 
-// ── 4. list / open / close ────────────────────────────────────────────────
-await scenario('tool_groups 的 list / open / close', { groups: [BROWSER_GROUP, TASKBOARD_GROUP] }, async (world) => {
-  const agent = makeAgent('main-2', { tools: world.tools })
+// ── 4. 窗口级 open / close（落盘）─────────────────────────────────────────
+await scenario('窗口级 open / close', { groups: [BROWSER_GROUP, TASKBOARD_GROUP] }, async (world) => {
+  const agent = makeAgent('main-2', { cwd: 'E:/ws-a', tools: world.tools })
   await world.ctx.__emit('agent/created', { agent })
 
   const control = world.registered.find(tool => tool.name === 'tool_groups')
@@ -142,41 +161,65 @@ await scenario('tool_groups 的 list / open / close', { groups: [BROWSER_GROUP, 
 
   const listed = await control.execute({ action: 'list' }, { agent })
   check('list 返回两组', listed.groups.length === 2, JSON.stringify(listed.groups))
-  check('list 时两组都未展开', listed.groups.every(g => g.open === false))
-  check('list 的 hiddenCount 正确', listed.hiddenCount === 5, JSON.stringify(listed.hiddenCount))
+  check('list 返回三级配置', listed.levels.length === 3, JSON.stringify(listed.levels))
 
-  const opened = await control.execute({ action: 'open', group: 'browser' }, { agent })
+  const opened = await control.execute({ action: 'open', target: 'browser' }, { agent })
   check('open 成功', opened.ok === true, opened.message)
-  const afterOpen = (liveRestriction(world.restrictions)?.filter?.deny ?? [])
-  check('展开后浏览器工具不再被 deny', !afterOpen.includes('dsh_browser_open'), JSON.stringify(afterOpen))
-  check('展开后 taskboard 仍被收着', afterOpen.includes('taskboard_list'))
-  check('hiddenCount 降到 2', opened.hiddenCount === 2, JSON.stringify(opened.hiddenCount))
+  check('展开后浏览器工具不再被 deny', !denyOf(world.restrictions).includes('dsh_browser_open'), sorted(denyOf(world.restrictions)))
+  check('taskboard 仍被收着', denyOf(world.restrictions).includes('taskboard_list'))
 
-  const closed = await control.execute({ action: 'close', group: 'browser' }, { agent })
+  check('窗口级配置已落盘', existsSync(SESSION_FILE), SESSION_FILE)
+  if (existsSync(SESSION_FILE)) {
+    const saved = JSON.parse(readFileSync(SESSION_FILE, 'utf8'))
+    check('落盘内容包含该会话的 open', JSON.stringify(saved['main-2']?.open ?? []) === JSON.stringify(['browser']), JSON.stringify(saved))
+  }
+
+  const closed = await control.execute({ action: 'close', target: 'browser' }, { agent })
   check('close 成功', closed.ok === true)
-  const afterClose = (liveRestriction(world.restrictions)?.filter?.deny ?? [])
-  check('收起后浏览器工具又被 deny', afterClose.includes('dsh_browser_open'))
-
-  const bad = await control.execute({ action: 'open', group: 'nope' }, { agent })
-  check('打开不存在的组返回 ok:false', bad.ok === false)
+  check('收起后又 deny', denyOf(world.restrictions).includes('dsh_browser_open'))
 })
 
-// ── 5. 空 groups 不生效 ───────────────────────────────────────────────────
+// ── 5. 三级合并（用户给的例子）────────────────────────────────────────────
+{
+  console.log('\n▶ 三级合并：全局 close{a,b,c} → 工作区 open{b} → 窗口 close{d} open{c}')
+  // 窗口级配置先落盘
+  mkdirSync(join(TMP_HOME, 'context-slimmer'), { recursive: true })
+  writeFileSync(SESSION_FILE, JSON.stringify({ 'main-3': { close: ['d'], open: ['c'] } }, null, 2), 'utf8')
+
+  const world = makeWorld({ tools: ['a', 'b', 'c', 'd', 'e'] })
+  apply(world.ctx, {
+    groups: [{ name: 'all', patterns: ['*'] }],
+    close: ['a', 'b', 'c'],
+    workspaces: { 'E:/ws-b': { open: ['b'] } },
+  })
+  const agent = makeAgent('main-3', { cwd: 'E:/ws-b', tools: world.tools })
+  await world.ctx.__emit('agent/created', { agent })
+
+  const deny = denyOf(world.restrictions)
+  check('a 被收起（全局 close）', deny.includes('a'), sorted(deny))
+  check('b 可见（工作区 open 覆盖全局 close）', !deny.includes('b'), sorted(deny))
+  check('c 可见（窗口 open 覆盖全局 close）', !deny.includes('c'), sorted(deny))
+  check('d 被收起（窗口 close）', deny.includes('d'), sorted(deny))
+  check('e 可见（三级都没提）', !deny.includes('e'), sorted(deny))
+  check('最终只有 a、d 被收起', sorted(deny) === 'a,d', sorted(deny))
+}
+
+// ── 6. 空 groups 不生效 ───────────────────────────────────────────────────
 await scenario('空 groups 不生效', {}, async (world) => {
-  const agent = makeAgent('main-3', { tools: world.tools })
+  const agent = makeAgent('main-4', { tools: world.tools })
   await world.ctx.__emit('agent/created', { agent })
   check('没有产生 restriction', world.restrictions.length === 0)
   check('日志提示没配置分组', world.logs.some(line => line.includes('没有配置任何 groups')))
 })
 
-// ── 6. 环境变量开关 ───────────────────────────────────────────────────────
+// ── 7. 环境变量开关 ───────────────────────────────────────────────────────
 {
   console.log('\n▶ 急救开关 DSH_CONTEXT_SLIMMER_OFF=1')
   process.env.DSH_CONTEXT_SLIMMER_OFF = '1'
   const world = makeWorld()
   try {
     apply(world.ctx, { groups: [BROWSER_GROUP] })
-    const agent = makeAgent('main-4', { tools: world.tools })
+    const agent = makeAgent('main-5', { tools: world.tools })
     await world.ctx.__emit('agent/created', { agent })
     check('没有施加 restriction', world.restrictions.length === 0)
     check('没有注册 tool_groups', world.registered.length === 0)
@@ -185,19 +228,12 @@ await scenario('空 groups 不生效', {}, async (world) => {
   }
 }
 
-// ── 7. 匹配不到的组要告警 ─────────────────────────────────────────────────
+// ── 8. 匹配不到的组告警 ───────────────────────────────────────────────────
 await scenario('匹配不到的组告警', { groups: [{ name: 'ghost', patterns: ['no_such_tool_*'] }] }, async (world) => {
-  const agent = makeAgent('main-5', { tools: world.tools })
+  const agent = makeAgent('main-6', { tools: world.tools })
   await world.ctx.__emit('agent/created', { agent })
   check('日志里有告警', world.logs.some(line => line.includes('没有匹配到任何全局工具')))
   check('不产生空 deny 的 restriction', world.restrictions.length === 0)
-})
-
-// ── 8. openByDefault ──────────────────────────────────────────────────────
-await scenario('openByDefault 开局展开', { groups: [BROWSER_GROUP], openByDefault: ['browser'] }, async (world) => {
-  const agent = makeAgent('main-6', { tools: world.tools })
-  await world.ctx.__emit('agent/created', { agent })
-  check('浏览器组开局就可见', world.restrictions.length === 0 || !(liveRestriction(world.restrictions)?.filter?.deny ?? []).includes('dsh_browser_open'))
 })
 
 // ── 9. 补扫已存在的 agent ─────────────────────────────────────────────────
@@ -219,5 +255,7 @@ await scenario('disposed 撤限制', { groups: [BROWSER_GROUP] }, async (world) 
   check('disposed 后撤销', world.restrictions[0]?.disposed === true)
 })
 
+// ── 收尾 ─────────────────────────────────────────────────────────────────
+rmSync(TMP_HOME, { recursive: true, force: true })
 console.log(`\n${failures === 0 ? '✅ 全部通过' : `❌ ${failures} 项失败`}`)
 process.exit(failures === 0 ? 0 : 1)

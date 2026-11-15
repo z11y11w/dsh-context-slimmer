@@ -1,27 +1,39 @@
 # dsh-context-slimmer 的装载行。
 #
-# 挂 profile 层：它对每个「主代理」（origin 不是 subagent 的会话）生效，
-# 按下面的 groups 把全局工具收起来，模型需要时用 tool_groups 打开。
+# 三级配置，按工具名累积覆盖（优先级 窗口 > 工作区 > 全局）：
+#   全局   这份 config 的 close / open
+#   工作区 config.workspaces["<cwd>"] 的 close / open
+#   窗口   <DSH_HOME>/context-slimmer/sessions.json（由 tool_groups 写入）
+#
+# 合并规则：从低到高依次应用 close（加入隐藏集）与 open（移出隐藏集）。
+#   例：全局 close {a,b,c} → 工作区 open {b} → 窗口 close {d} open {c}
+#       最终可见：b、c；不可见：a、d
 - insert:
     - id: context-slimmer
       name: dsh-context-slimmer
       config:
         enabled: true
-        # 分组规则。空数组 = 什么都不收（安全默认）。
-        # 名字用通配符匹配「全局层」的工具名，按顺序匹配，同一个工具可以落进多个组
-        # （只要有一组展开它就可见）。
+
+        # 分组定义：只描述"哪些工具归哪一组"，不决定收不收。
         groups: []
         #   - name: browser
         #     patterns: ["dsh_browser_*"]
-        #   - name: taskboard
-        #     patterns: ["taskboard_*"]
-        #   - name: topic
-        #     patterns: ["search_*"]
+        #   - name: github
+        #     patterns: ["gh_*", "github_api"]
 
-        # 一开始就展开的组（不写 = 全部收起）
-        openByDefault: []
+        # 全局层收起哪些（组名、工具名或通配符）。
+        # 不写 close = 收起所有已定义的组（1.0 的行为）。
+        close: []
+        # 全局层放出哪些，覆盖本级的 close。
+        open: []
 
-        # 是否也管子代理。默认 false（本插件只为主代理设计）。
+        # 工作区层：按会话的 cwd 覆盖，最长前缀优先。
+        workspaces: {}
+        #   "E:/working":
+        #     close: ["github"]
+        #     open: ["browser"]
+
+        # 是否也管子代理。默认 false：子代理交给 subagent-tool-guard。
         includeSubagents: false
 
         # 每个 agent 打一行日志（排查看这里）
