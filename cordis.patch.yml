@@ -1,0 +1,28 @@
+# dsh-context-slimmer 的装载行。
+#
+# 挂 profile 层：它对每个「主代理」（origin 不是 subagent 的会话）生效，
+# 按下面的 groups 把全局工具收起来，模型需要时用 tool_groups 打开。
+- insert:
+    - id: context-slimmer
+      name: dsh-context-slimmer
+      config:
+        enabled: true
+        # 分组规则。空数组 = 什么都不收（安全默认）。
+        # 名字用通配符匹配「全局层」的工具名，按顺序匹配，同一个工具可以落进多个组
+        # （只要有一组展开它就可见）。
+        groups: []
+        #   - name: browser
+        #     patterns: ["dsh_browser_*"]
+        #   - name: taskboard
+        #     patterns: ["taskboard_*"]
+        #   - name: bili
+        #     patterns: ["bili_*"]
+
+        # 一开始就展开的组（不写 = 全部收起）
+        openByDefault: []
+
+        # 是否也管子代理。默认 false（本插件只为主代理设计）。
+        includeSubagents: false
+
+        # 每个 agent 打一行日志（排查看这里）
+        verbose: false

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "主代理工具裁剪",
+    "description": "把主代理的全局工具按组收起来，模型需要时用 tool_groups 打开一组。减少每轮为工具定义付的 token，能力一个都不删。",
+    "detail": "docs/DETAIL.md"
+  }
+}

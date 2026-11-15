@@ -1,0 +1,48 @@
+{
+  "name": "dsh-context-slimmer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Group a main agent's global tools and keep them collapsed until the model opens a group, cutting per-turn tool-definition tokens.",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg"
+  ],
+  "engines": {
+    "dsh": ">=0.2.2-rc.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT",
+  "author": "z11y11w",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/z11y11w/dsh-context-slimmer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/z11y11w/dsh-context-slimmer/issues"
+  },
+  "homepage": "https://github.com/z11y11w/dsh-context-slimmer#readme",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "tools",
+    "context"
+  ]
+}

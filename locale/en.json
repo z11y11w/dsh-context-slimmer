@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Context slimmer",
+    "description": "Groups a main agent's global tools and keeps them out of the tool list until the model opens a group with the tool_groups tool. Cuts per-turn tokens spent on tool definitions without removing any capability.",
+    "detail": "docs/DETAIL.md"
+  }
+}
