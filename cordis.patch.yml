@@ -15,8 +15,8 @@
         #     patterns: ["dsh_browser_*"]
         #   - name: taskboard
         #     patterns: ["taskboard_*"]
-        #   - name: bili
-        #     patterns: ["bili_*"]
+        #   - name: topic
+        #     patterns: ["search_*"]
 
         # 一开始就展开的组（不写 = 全部收起）
         openByDefault: []

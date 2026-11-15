@@ -22,7 +22,7 @@ const GLOBAL_TOOLS = [
   'read', 'write', 'pwsh', 'web_search',
   'dsh_browser_open', 'dsh_browser_snapshot', 'dsh_browser_click',
   'taskboard_list', 'taskboard_create',
-  'bili_scan', 'bili_search',
+  'search_topic', 'search_queries',
 ]
 
 function makeWorld(options = {}) {
